@@ -1,6 +1,10 @@
 package com.vitkkk.fnfmobilestudio.storage
 
 import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
+import com.vitkkk.fnfmobilestudio.model.AssetKind
+import com.vitkkk.fnfmobilestudio.model.AssetRef
 import com.vitkkk.fnfmobilestudio.model.Project
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -8,8 +12,9 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.UUID
 
-class ProjectStore(context: Context) {
+class ProjectStore(private val context: Context) {
     private val root = File(context.filesDir, "projects")
     private val json = Json {
         prettyPrint = true
@@ -26,8 +31,14 @@ class ProjectStore(context: Context) {
             .map { File(it, PROJECT_FILE) }
             .filter { it.isFile }
             .mapNotNull { file -> runCatching { json.decodeFromString<Project>(file.readText()) }.getOrNull() }
-            .sortedBy { it.name.lowercase() }
+            .sortedByDescending { projectDirectory(it.id).lastModified() }
             .toList()
+    }
+
+    suspend fun load(projectId: String): Project? = withContext(Dispatchers.IO) {
+        val file = File(projectDirectory(projectId), PROJECT_FILE)
+        if (!file.isFile) return@withContext null
+        runCatching { json.decodeFromString<Project>(file.readText()) }.getOrNull()
     }
 
     suspend fun createProject(name: String, author: String): Project = withContext(Dispatchers.IO) {
@@ -50,6 +61,45 @@ class ProjectStore(context: Context) {
         projectDirectory(projectId).deleteRecursively()
     }
 
+    suspend fun importAsset(
+        projectId: String,
+        uri: Uri,
+        kind: AssetKind,
+        folder: String
+    ): AssetRef = withContext(Dispatchers.IO) {
+        val projectDir = projectDirectory(projectId)
+        check(projectDir.exists()) { "Project '$projectId' does not exist" }
+        val sourceName = displayName(uri) ?: "asset"
+        val safeName = safeFileName(sourceName)
+        val assetDir = File(projectDir, "assets/${safeFileName(folder)}")
+        check(assetDir.exists() || assetDir.mkdirs()) { "Could not create asset directory" }
+
+        var target = File(assetDir, safeName)
+        var suffix = 2
+        val stem = safeName.substringBeforeLast('.', safeName)
+        val extension = safeName.substringAfterLast('.', "").let { if (it.isBlank()) "" else ".$it" }
+        while (target.exists()) {
+            target = File(assetDir, "$stem-$suffix$extension")
+            suffix++
+        }
+
+        context.contentResolver.openInputStream(uri).use { input ->
+            checkNotNull(input) { "Could not open selected file" }
+            target.outputStream().use { output -> input.copyTo(output) }
+        }
+
+        AssetRef(
+            id = UUID.randomUUID().toString(),
+            relativePath = target.relativeTo(projectDir).invariantSeparatorsPath,
+            kind = kind
+        )
+    }
+
+    fun projectDirectory(projectId: String): File = File(root, projectId)
+
+    fun assetFile(projectId: String, asset: AssetRef): File =
+        File(projectDirectory(projectId), asset.relativePath)
+
     private fun saveBlocking(project: Project) {
         ensureRoot()
         val dir = projectDirectory(project.id)
@@ -59,13 +109,22 @@ class ProjectStore(context: Context) {
         temp.writeText(json.encodeToString(project))
         if (target.exists() && !target.delete()) error("Could not replace project file")
         check(temp.renameTo(target)) { "Could not atomically save project" }
+        dir.setLastModified(System.currentTimeMillis())
+    }
+
+    private fun displayName(uri: Uri): String? = context.contentResolver.query(
+        uri,
+        arrayOf(OpenableColumns.DISPLAY_NAME),
+        null,
+        null,
+        null
+    )?.use { cursor ->
+        if (cursor.moveToFirst()) cursor.getString(0) else null
     }
 
     private fun ensureRoot() {
         check(root.exists() || root.mkdirs()) { "Could not create projects directory ${root.absolutePath}" }
     }
-
-    private fun projectDirectory(id: String) = File(root, id)
 
     private fun slug(value: String): String = value
         .trim()
@@ -74,6 +133,12 @@ class ProjectStore(context: Context) {
         .replace(Regex("-+"), "-")
         .trim('-')
         .ifEmpty { "untitled-mod" }
+
+    private fun safeFileName(value: String): String = value
+        .trim()
+        .replace(Regex("[^A-Za-z0-9._-]+"), "-")
+        .trim('-', '.')
+        .ifEmpty { "asset" }
 
     private companion object {
         const val PROJECT_FILE = "project.json"
