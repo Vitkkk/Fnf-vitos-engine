@@ -2,6 +2,7 @@ package com.vitkkk.fnfmobilestudio.ui
 
 import android.media.MediaPlayer
 import android.net.Uri
+import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -24,10 +25,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -36,7 +39,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.vitkkk.fnfmobilestudio.model.*
+import com.vitkkk.fnfmobilestudio.model.AssetKind
+import com.vitkkk.fnfmobilestudio.model.Chart
+import com.vitkkk.fnfmobilestudio.model.EditorObjectKind
+import com.vitkkk.fnfmobilestudio.model.Note
+import com.vitkkk.fnfmobilestudio.model.NoteOwner
+import com.vitkkk.fnfmobilestudio.model.Project
+import com.vitkkk.fnfmobilestudio.model.Song
+import com.vitkkk.fnfmobilestudio.model.SpritePackage
+import com.vitkkk.fnfmobilestudio.model.StageCharacterSlot
+import com.vitkkk.fnfmobilestudio.model.StageDefinition
+import com.vitkkk.fnfmobilestudio.model.StageObject
 import com.vitkkk.fnfmobilestudio.storage.ProjectStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -47,7 +60,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
 
-private enum class LevelTabV5 { STAGE, CHART, EVENTS }
+private enum class LevelTabV5 { STAGE, CHART }
 private data class LevelNoteKeyV5(val timeMs: Double, val lane: Int, val owner: NoteOwner)
 
 @Composable
@@ -61,33 +74,30 @@ internal fun LevelEditorScreenV5(
 ) {
     val song = project.songs.firstOrNull { it.id == songId } ?: return
     val stageId = song.stageId ?: "stage"
-    val initialStage = project.stages.firstOrNull { it.id == stageId }
+    val persistedStage = project.stages.firstOrNull { it.id == stageId }
         ?: StageDefinition(id = stageId, displayName = if (stageId == "stage") "Stage" else stageId)
 
-    var stage by remember(songId, stageId) { mutableStateOf(initialStage) }
+    var stage by remember(songId, stageId) { mutableStateOf(persistedStage) }
     var tab by remember(songId) { mutableStateOf(LevelTabV5.CHART) }
-    var selectedStageItem by remember { mutableStateOf<String?>(null) }
+    var selectedStageItem by remember(songId) { mutableStateOf<String?>(null) }
     var showPackages by remember { mutableStateOf(false) }
     var showCreatePackage by remember { mutableStateOf(false) }
-    var packageKindPending by remember { mutableStateOf<EditorObjectKind?>(null) }
     var packageNamePending by remember { mutableStateOf("") }
+    var packageKindPending by remember { mutableStateOf<EditorObjectKind?>(null) }
     var showEventsNotice by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(project.stages, stageId) {
-        project.stages.firstOrNull { it.id == stageId }?.let { persisted ->
-            if (persisted != stage) stage = persisted
-        }
-    }
-
-    fun persistStage(updated: StageDefinition = stage, updatedProject: Project = project) {
+    fun saveStage(updated: StageDefinition = stage, base: Project = project) {
         stage = updated
-        val stages = if (updatedProject.stages.any { it.id == updated.id }) {
-            updatedProject.stages.map { if (it.id == updated.id) updated else it }
+        val stages = if (base.stages.any { it.id == updated.id }) {
+            base.stages.map { if (it.id == updated.id) updated else it }
         } else {
-            updatedProject.stages + updated
+            base.stages + updated
         }
-        onProjectChange(updatedProject.copy(stages = stages))
+        val songs = base.songs.map {
+            if (it.id == song.id && it.stageId == null) it.copy(stageId = updated.id) else it
+        }
+        onProjectChange(base.copy(stages = stages, songs = songs))
     }
 
     val addImageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
@@ -103,7 +113,7 @@ internal fun LevelEditorScreenV5(
                 editorKind = EditorObjectKind.ITEM
             )
             selectedStageItem = "obj:${obj.id}"
-            persistStage(stage.copy(objects = stage.objects + obj), project.copy(assets = project.assets + asset))
+            saveStage(stage.copy(objects = stage.objects + obj), project.copy(assets = project.assets + asset))
         }
     }
 
@@ -122,7 +132,7 @@ internal fun LevelEditorScreenV5(
                 editorKind = EditorObjectKind.SCENERY
             )
             selectedStageItem = "obj:${obj.id}"
-            persistStage(stage.copy(objects = stage.objects + obj), project.copy(assets = project.assets + asset))
+            saveStage(stage.copy(objects = stage.objects + obj), project.copy(assets = project.assets + asset))
         }
     }
 
@@ -137,8 +147,8 @@ internal fun LevelEditorScreenV5(
                 imageAssetId = asset.id
             )
             onProjectChange(project.copy(assets = project.assets + asset, spritePackages = project.spritePackages + pack))
-            packageKindPending = null
             packageNamePending = ""
+            packageKindPending = null
             showPackages = true
         }
     }
@@ -158,7 +168,7 @@ internal fun LevelEditorScreenV5(
                 interactive = tab == LevelTabV5.STAGE,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(if (tab == LevelTabV5.STAGE) 230.dp else 150.dp)
+                    .height(if (tab == LevelTabV5.STAGE) 235.dp else 145.dp)
                     .padding(horizontal = 10.dp),
                 onSelect = { selectedStageItem = it },
                 onMoveObject = { id, dx, dy ->
@@ -177,17 +187,23 @@ internal fun LevelEditorScreenV5(
 
             Spacer(Modifier.height(7.dp))
             MakerTabRow(
-                labels = listOf("Stage", "Chart", "Eventos"),
-                selected = tab.ordinal,
-                onSelect = { index: Int ->
-                    when (index) {
-                        0 -> tab = LevelTabV5.STAGE
-                        1 -> tab = LevelTabV5.CHART
-                        else -> showEventsNotice = true
-                    }
-                },
-                modifier = Modifier.padding(horizontal = 10.dp)
+                listOf("Stage", "Chart"),
+                tab.ordinal,
+                { index: Int -> tab = if (index == 0) LevelTabV5.STAGE else LevelTabV5.CHART },
+                Modifier.padding(horizontal = 10.dp)
             )
+
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Text(
+                    "EVENTOS: depois",
+                    color = MakerPalette.Muted,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable { showEventsNotice = true }.padding(6.dp)
+                )
+            }
 
             when (tab) {
                 LevelTabV5.STAGE -> LevelStageToolsV5(
@@ -195,20 +211,12 @@ internal fun LevelEditorScreenV5(
                     selected = selectedStageItem,
                     onSelected = { selectedStageItem = it },
                     onStage = { stage = it },
-                    onSave = { persistStage(stage) },
+                    onSave = { saveStage(stage) },
                     onAddImage = { addImageLauncher.launch(arrayOf("image/*")) },
                     onAddBackground = { addBackgroundLauncher.launch(arrayOf("image/*")) },
                     onPackages = { showPackages = true }
                 )
-
-                LevelTabV5.CHART -> LevelChartV5(
-                    project = project,
-                    song = song,
-                    store = store,
-                    onProjectChange = onProjectChange
-                )
-
-                LevelTabV5.EVENTS -> Unit
+                LevelTabV5.CHART -> LevelChartV5(project, song, store, onProjectChange)
             }
         }
     }
@@ -220,19 +228,21 @@ internal fun LevelEditorScreenV5(
             onDismiss = { showPackages = false },
             onCreate = { showPackages = false; showCreatePackage = true },
             onUse = { pack ->
-                val assetId = pack.imageAssetId ?: return@LevelPackageDialogV5
-                val obj = StageObject(
-                    id = "obj-${UUID.randomUUID().toString().take(8)}",
-                    name = pack.displayName,
-                    assetId = assetId,
-                    x = 640.0,
-                    y = 360.0,
-                    layer = (stage.objects.maxOfOrNull { it.layer } ?: -1) + 1,
-                    packageId = pack.id,
-                    editorKind = pack.kind
-                )
-                stage = stage.copy(objects = stage.objects + obj)
-                selectedStageItem = "obj:${obj.id}"
+                val assetId = pack.imageAssetId ?: pack.iconAssetId
+                if (assetId != null) {
+                    val obj = StageObject(
+                        id = "obj-${UUID.randomUUID().toString().take(8)}",
+                        name = pack.displayName,
+                        assetId = assetId,
+                        x = 640.0,
+                        y = 360.0,
+                        layer = (stage.objects.maxOfOrNull { it.layer } ?: -1) + 1,
+                        packageId = pack.id,
+                        editorKind = pack.kind
+                    )
+                    stage = stage.copy(objects = stage.objects + obj)
+                    selectedStageItem = "obj:${obj.id}"
+                }
                 showPackages = false
             }
         )
@@ -242,9 +252,9 @@ internal fun LevelEditorScreenV5(
         CreatePackageDialogV5(
             onDismiss = { showCreatePackage = false },
             onCreate = { name, kind ->
-                showCreatePackage = false
                 packageNamePending = name
                 packageKindPending = kind
+                showCreatePackage = false
                 packageImageLauncher.launch(arrayOf("image/*"))
             }
         )
@@ -254,7 +264,7 @@ internal fun LevelEditorScreenV5(
         AlertDialog(
             onDismissRequest = { showEventsNotice = false },
             title = { Text("Eventos") },
-            text = { Text("A aba já faz parte do Level Editor, mas o editor de eventos continua reservado para uma etapa futura.") },
+            text = { Text("O Level Editor já reserva espaço para eventos, mas essa parte continua fora desta etapa.") },
             confirmButton = { TextButton(onClick = { showEventsNotice = false }) { Text("OK") } }
         )
     }
@@ -282,10 +292,14 @@ private fun LevelPreviewV5(
         val heightDp = maxHeight.value.coerceAtLeast(1f)
         val density = LocalDensity.current.density
 
+        if (stage.previewAssetId != null) {
+            AssetThumbnail(project, stage.previewAssetId, store, Modifier.fillMaxSize(), "BG")
+        }
+
         stage.objects.sortedBy { it.layer }.forEach { obj ->
-            val base = if (obj.editorKind == EditorObjectKind.SCENERY) 126.dp else 76.dp
-            val objectWidth = base * obj.scaleX.toFloat().coerceIn(0.15f, 5f)
-            val objectHeight = base * obj.scaleY.toFloat().coerceIn(0.15f, 5f)
+            val base = if (obj.editorKind == EditorObjectKind.SCENERY) 130.dp else 78.dp
+            val objectWidth = base * obj.scaleX.toFloat().coerceIn(0.12f, 6f)
+            val objectHeight = base * obj.scaleY.toFloat().coerceIn(0.12f, 6f)
             val x = maxWidth * (obj.x / 1280.0).toFloat()
             val y = maxHeight * (obj.y / 720.0).toFloat()
             val gesture = if (interactive) {
@@ -302,6 +316,10 @@ private fun LevelPreviewV5(
                 Modifier
                     .offset(x = x - objectWidth / 2, y = y - objectHeight / 2)
                     .size(objectWidth, objectHeight)
+                    .graphicsLayer(
+                        alpha = obj.alpha.toFloat().coerceIn(0f, 1f),
+                        scaleX = if (obj.flipX) -1f else 1f
+                    )
                     .then(gesture)
                     .clickable(enabled = interactive) { onSelect("obj:${obj.id}") }
                     .border(
@@ -310,19 +328,19 @@ private fun LevelPreviewV5(
                         RoundedCornerShape(5.dp)
                     )
             ) {
-                AssetThumbnail(project, obj.assetId, store, Modifier.fillMaxSize(), "OBJ")
+                AssetThumbnail(project, obj.assetId, store, Modifier.fillMaxSize(), obj.editorKind.name.take(2))
             }
         }
 
-        val oppId = song.opponentId ?: stage.previewOpponentId ?: "dad"
-        val gfId = song.girlfriendId ?: stage.previewGirlfriendId ?: "gf"
-        val bfId = song.playerId ?: stage.previewBoyfriendId ?: "bf"
+        val opponentId = song.opponentId ?: stage.previewOpponentId ?: "dad"
+        val girlfriendId = song.girlfriendId ?: stage.previewGirlfriendId ?: "gf"
+        val playerId = song.playerId ?: stage.previewBoyfriendId ?: "bf"
 
-        LevelCharacterV5(project, store, oppId, "opp", stage.opponent, selected, maxWidth, maxHeight, density, interactive, onSelect, onMoveCharacter)
+        LevelCharacterV5(project, store, opponentId, "opp", stage.opponent, selected, maxWidth, maxHeight, density, interactive, onSelect, onMoveCharacter)
         if (!stage.hideGirlfriend) {
-            LevelCharacterV5(project, store, gfId, "gf", stage.girlfriend, selected, maxWidth, maxHeight, density, interactive, onSelect, onMoveCharacter)
+            LevelCharacterV5(project, store, girlfriendId, "gf", stage.girlfriend, selected, maxWidth, maxHeight, density, interactive, onSelect, onMoveCharacter)
         }
-        LevelCharacterV5(project, store, bfId, "bf", stage.boyfriend, selected, maxWidth, maxHeight, density, interactive, onSelect, onMoveCharacter)
+        LevelCharacterV5(project, store, playerId, "bf", stage.boyfriend, selected, maxWidth, maxHeight, density, interactive, onSelect, onMoveCharacter)
     }
 }
 
@@ -341,7 +359,7 @@ private fun BoxScope.LevelCharacterV5(
     onSelect: (String) -> Unit,
     onMove: (String, Double, Double) -> Unit
 ) {
-    val markerSize = 80.dp
+    val markerSize = 82.dp
     val x = width * (slot.x / 1280.0).toFloat()
     val y = height * (slot.y / 720.0).toFloat()
     val gesture = if (interactive) {
@@ -362,7 +380,7 @@ private fun BoxScope.LevelCharacterV5(
         Modifier
             .offset(x = x - markerSize / 2, y = y - markerSize / 2)
             .size(markerSize)
-            .background(MakerPalette.PanelDark.copy(alpha = 0.35f), RoundedCornerShape(7.dp))
+            .background(MakerPalette.PanelDark.copy(alpha = 0.32f), RoundedCornerShape(7.dp))
             .then(gesture)
             .clickable(enabled = interactive) { onSelect(role) }
             .border(
@@ -392,12 +410,10 @@ private fun LevelStageToolsV5(
     onAddBackground: () -> Unit,
     onPackages: () -> Unit
 ) {
-    val selectedObject = selected
-        ?.removePrefix("obj:")
-        ?.let { id -> stage.objects.firstOrNull { it.id == id } }
+    val selectedObject = selected?.removePrefix("obj:")?.let { id -> stage.objects.firstOrNull { it.id == id } }
 
     Column(
-        Modifier.fillMaxSize().padding(10.dp),
+        Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(7.dp)
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -408,14 +424,21 @@ private fun LevelStageToolsV5(
         }
 
         MakerPanel(
-            if (selectedObject != null) "Objeto • ${selectedObject.name}" else "Stage",
+            if (selectedObject != null) "Objeto • ${selectedObject.name}" else "Cena",
             Modifier.fillMaxWidth().weight(1f)
         ) {
             if (selectedObject == null) {
-                Text(
-                    "Toque em um objeto ou personagem na preview. Arraste diretamente para mover.",
-                    color = MakerPalette.Muted
-                )
+                val role = when (selected) {
+                    "opp" -> "Inimigo"
+                    "gf" -> "Girlfriend"
+                    "bf" -> "Jogador"
+                    else -> null
+                }
+                if (role != null) {
+                    Text("$role selecionado. Arraste a imagem diretamente na preview para posicionar.", color = MakerPalette.Muted)
+                } else {
+                    Text("Toque em um objeto/personagem na preview. Arraste para mover. Fundo importado também vira objeto e pode ser reposicionado.", color = MakerPalette.Muted)
+                }
                 MakerLabelValue("Stage", stage.displayName)
                 MakerLabelValue("Objetos", stage.objects.size.toString())
                 MakerValueStepper(
@@ -457,6 +480,18 @@ private fun LevelStageToolsV5(
                         onStage(stage.copy(objects = stage.objects.map { if (it.id == updated.id) updated else it }))
                     }
                 )
+                MakerValueStepper(
+                    "Alpha",
+                    "${"%.1f".format(selectedObject.alpha)}",
+                    {
+                        val updated = selectedObject.copy(alpha = max(0.0, selectedObject.alpha - 0.1))
+                        onStage(stage.copy(objects = stage.objects.map { if (it.id == updated.id) updated else it }))
+                    },
+                    {
+                        val updated = selectedObject.copy(alpha = min(1.0, selectedObject.alpha + 0.1))
+                        onStage(stage.copy(objects = stage.objects.map { if (it.id == updated.id) updated else it }))
+                    }
+                )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     MakerButton(
                         if (selectedObject.flipX) "FLIP X: SIM" else "FLIP X: NÃO",
@@ -468,12 +503,28 @@ private fun LevelStageToolsV5(
                         MakerButtonTone.DARK
                     )
                     MakerButton(
+                        "DUPLICAR",
+                        {
+                            val copy = selectedObject.copy(
+                                id = "obj-${UUID.randomUUID().toString().take(8)}",
+                                name = selectedObject.name + " copy",
+                                x = selectedObject.x + 24,
+                                y = selectedObject.y + 24,
+                                layer = selectedObject.layer + 1
+                            )
+                            onStage(stage.copy(objects = stage.objects + copy))
+                            onSelected("obj:${copy.id}")
+                        },
+                        Modifier.weight(1f),
+                        MakerButtonTone.ACCENT
+                    )
+                    MakerButton(
                         "🗑",
                         {
                             onStage(stage.copy(objects = stage.objects - selectedObject))
                             onSelected(null)
                         },
-                        Modifier.weight(0.45f),
+                        Modifier.weight(0.42f),
                         MakerButtonTone.DANGER
                     )
                 }
@@ -490,55 +541,44 @@ private fun LevelChartV5(
     onProjectChange: (Project) -> Unit
 ) {
     val difficulty = song.difficulties.firstOrNull() ?: return
-    val sourceChart = difficulty.chart
+    val chart = difficulty.chart
     val bpm = song.bpm.coerceAtLeast(1.0)
     val beatMs = 60_000.0 / bpm
     val snapValues = listOf(4, 8, 12, 16, 24, 32, 48, 64)
-
-    var notes by remember(song.id, difficulty.id) { mutableStateOf(sourceChart.notes) }
     var snapIndex by remember(song.id) { mutableIntStateOf(3) }
+    val snap = snapValues[snapIndex]
+    val snapMs = beatMs * 4.0 / snap
     var zoom by remember(song.id) { mutableDoubleStateOf(1.0) }
     var startMs by remember(song.id) { mutableDoubleStateOf(0.0) }
     var currentMs by remember(song.id) { mutableDoubleStateOf(0.0) }
     var isPlaying by remember(song.id) { mutableStateOf(false) }
     var follow by remember(song.id) { mutableStateOf(true) }
-    var sustainKey by remember(song.id) { mutableStateOf<LevelNoteKeyV5?>(null) }
+    var sustainActive by remember(song.id) { mutableStateOf<LevelNoteKeyV5?>(null) }
 
-    val snap = snapValues[snapIndex]
-    val snapMs = beatMs * 4.0 / snap
-
-    LaunchedEffect(sourceChart.notes, sustainKey) {
-        if (sustainKey == null && sourceChart.notes != notes) notes = sourceChart.notes
-    }
-
-    fun persistNotes(updatedNotes: List<Note>) {
-        notes = updatedNotes.sortedBy { it.timeMs }
-        val updatedChart = sourceChart.copy(notes = notes)
+    fun replaceChart(newChart: Chart) {
         val difficulties = song.difficulties.mapIndexed { index, d ->
-            if (index == 0) d.copy(chart = updatedChart) else d
+            if (index == 0) d.copy(chart = newChart) else d
         }
         val updatedSong = song.copy(difficulties = difficulties)
         onProjectChange(project.copy(songs = project.songs.map { if (it.id == song.id) updatedSong else it }))
     }
 
-    fun previewSustain(key: LevelNoteKeyV5, sustainMs: Double) {
-        notes = notes.map { note ->
-            if (note.timeMs == key.timeMs && note.lane == key.lane && note.owner == key.owner) {
-                note.copy(sustainMs = max(0.0, round(sustainMs / snapMs) * snapMs))
-            } else note
+    val audioAsset = project.assets.firstOrNull { it.id == song.instrumentalAssetId }
+    val audioPath = audioAsset?.let { store.assetFile(project.id, it).takeIf { file -> file.isFile }?.absolutePath }
+    val player = remember(audioPath) {
+        audioPath?.let { path ->
+            runCatching {
+                MediaPlayer().apply {
+                    setDataSource(path)
+                    prepare()
+                }
+            }.getOrNull()
         }
     }
 
-    val audioAsset = project.assets.firstOrNull { it.id == song.instrumentalAssetId }
-    val audioPath = audioAsset?.let {
-        store.assetFile(project.id, it).takeIf { file -> file.isFile }?.absolutePath
+    DisposableEffect(player) {
+        onDispose { runCatching { player?.release() } }
     }
-    val player = remember(audioPath) {
-        audioPath?.let { path ->
-            runCatching { MediaPlayer().apply { setDataSource(path); prepare() } }.getOrNull()
-        }
-    }
-    DisposableEffect(player) { onDispose { runCatching { player?.release() } } }
 
     LaunchedEffect(isPlaying, player, follow, zoom) {
         while (isPlaying && player != null) {
@@ -555,63 +595,69 @@ private fun LevelChartV5(
         }
     }
 
-    Column(
-        Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 7.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp)
-    ) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 5.dp)) {
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            MakerSquareButton("◀", { snapIndex = (snapIndex - 1).coerceAtLeast(0) }, size = 42.dp)
+            MakerSquareButton("◀", { snapIndex = (snapIndex - 1).coerceAtLeast(0) }, size = 40.dp)
             MakerButton("SNAP 1/$snap", {}, Modifier.weight(1f), MakerButtonTone.DARK)
-            MakerSquareButton("▶", { snapIndex = (snapIndex + 1).coerceAtMost(snapValues.lastIndex) }, size = 42.dp)
-            MakerButton("ZOOM ${"%.1f".format(zoom)}x", {}, Modifier.weight(0.8f), MakerButtonTone.DARK)
+            MakerSquareButton("▶", { snapIndex = (snapIndex + 1).coerceAtMost(snapValues.lastIndex) }, size = 40.dp)
+            MakerButton("${"%.1f".format(zoom)}x", {}, Modifier.weight(0.55f), MakerButtonTone.DARK)
         }
 
+        Spacer(Modifier.height(5.dp))
+
         GestureChartGridV5(
-            notes = notes,
+            notes = chart.notes,
             bpm = bpm,
             snap = snap,
             zoom = zoom,
             startMs = startMs,
             currentMs = currentMs,
-            sustainActive = sustainKey,
+            sustainActive = sustainActive,
             modifier = Modifier.weight(1f).fillMaxWidth(),
-            onPanMs = { delta ->
-                if (sustainKey == null && (!isPlaying || !follow)) startMs = max(0.0, startMs + delta)
-            },
-            onZoom = { factor ->
-                if (sustainKey == null) zoom = (zoom * factor).coerceIn(0.45, 5.0)
+            onViewport = { newStart, newZoom ->
+                if (!isPlaying || !follow) startMs = max(0.0, newStart)
+                zoom = newZoom.coerceIn(0.45, 5.0)
             },
             onTapCell = { owner, lane, time ->
-                val existing = notes.firstOrNull {
-                    it.owner == owner && it.lane == lane && abs(it.timeMs - time) <= snapMs * 0.38
-                }
+                val existing = chart.notes
+                    .filter { it.owner == owner && it.lane == lane }
+                    .minByOrNull { abs(it.timeMs - time) }
+                    ?.takeIf { abs(it.timeMs - time) <= snapMs * 0.42 }
+
                 if (existing != null) {
-                    persistNotes(notes - existing)
+                    replaceChart(chart.copy(notes = chart.notes - existing))
+                    sustainActive = null
                 } else {
-                    persistNotes(notes + Note(timeMs = time, lane = lane, owner = owner))
+                    val note = Note(timeMs = time, lane = lane, owner = owner)
+                    replaceChart(chart.copy(notes = (chart.notes + note).sortedBy { it.timeMs }))
                 }
             },
-            onSustainStart = { note ->
-                sustainKey = LevelNoteKeyV5(note.timeMs, note.lane, note.owner)
+            onSustainStart = { key -> sustainActive = key },
+            onSustainSet = { key, value ->
+                val current = chart.notes.firstOrNull {
+                    it.timeMs == key.timeMs && it.lane == key.lane && it.owner == key.owner
+                } ?: return@GestureChartGridV5
+                val snapped = max(0.0, round(value / snapMs) * snapMs)
+                val updated = current.copy(sustainMs = snapped)
+                replaceChart(chart.copy(notes = chart.notes.map { if (it == current) updated else it }))
+                sustainActive = key
             },
-            onSustainPreview = { key, value -> previewSustain(key, value) },
-            onSustainEnd = {
-                if (sustainKey != null) persistNotes(notes)
-                sustainKey = null
-            }
+            onSustainEnd = { sustainActive = null }
         )
 
+        Spacer(Modifier.height(5.dp))
         Text(
-            "1 dedo: timeline • 2 dedos: zoom • toque: criar/remover • segure + arraste: sustain",
+            "1 dedo: mover • 2 dedos: zoom • toque: criar/remover • segure uma nota e arraste: sustain",
             color = MakerPalette.Muted,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth()
         )
+        Spacer(Modifier.height(5.dp))
 
         Row(
             Modifier.fillMaxWidth(),
@@ -627,7 +673,7 @@ private fun LevelChartV5(
                     startMs = max(0.0, target - beatMs * 2)
                 },
                 modifier = Modifier.weight(0.22f),
-                size = 54.dp
+                size = 52.dp
             )
             MakerButton(
                 if (isPlaying) "Ⅱ" else "▶",
@@ -656,7 +702,7 @@ private fun LevelChartV5(
                     startMs = max(0.0, target - beatMs * 2)
                 },
                 modifier = Modifier.weight(0.22f),
-                size = 54.dp
+                size = 52.dp
             )
         }
     }
@@ -672,24 +718,23 @@ private fun GestureChartGridV5(
     currentMs: Double,
     sustainActive: LevelNoteKeyV5?,
     modifier: Modifier,
-    onPanMs: (Double) -> Unit,
-    onZoom: (Double) -> Unit,
+    onViewport: (Double, Double) -> Unit,
     onTapCell: (NoteOwner, Int, Double) -> Unit,
-    onSustainStart: (Note) -> Unit,
-    onSustainPreview: (LevelNoteKeyV5, Double) -> Unit,
+    onSustainStart: (LevelNoteKeyV5) -> Unit,
+    onSustainSet: (LevelNoteKeyV5, Double) -> Unit,
     onSustainEnd: () -> Unit
 ) {
-    val beatMs = 60_000.0 / bpm.coerceAtLeast(1.0)
-    val visibleBeats = 9.0 / zoom
     val haptic = LocalHapticFeedback.current
+    var stretching by remember { mutableStateOf(false) }
+    var suppressTapUntil by remember { mutableLongStateOf(0L) }
 
-    val currentNotes by rememberUpdatedState(notes)
-    val currentPan by rememberUpdatedState(onPanMs)
-    val currentZoom by rememberUpdatedState(onZoom)
-    val currentTap by rememberUpdatedState(onTapCell)
-    val currentSustainStart by rememberUpdatedState(onSustainStart)
-    val currentSustainPreview by rememberUpdatedState(onSustainPreview)
-    val currentSustainEnd by rememberUpdatedState(onSustainEnd)
+    val notesState = rememberUpdatedState(notes)
+    val startState = rememberUpdatedState(startMs)
+    val zoomState = rememberUpdatedState(zoom)
+    val snapState = rememberUpdatedState(snap)
+    val stretchingState = rememberUpdatedState(stretching)
+
+    val beatMs = 60_000.0 / bpm.coerceAtLeast(1.0)
 
     Box(
         modifier
@@ -699,71 +744,102 @@ private fun GestureChartGridV5(
         Canvas(
             Modifier
                 .fillMaxSize()
-                .pointerInput(startMs, zoom, snap) {
+                .pointerInput(bpm) {
                     detectTapGestures { pos ->
+                        if (SystemClock.uptimeMillis() < suppressTapUntil) return@detectTapGestures
+                        val currentZoom = zoomState.value
+                        val currentStart = startState.value
+                        val currentSnap = snapState.value
+                        val visibleBeats = 9.0 / currentZoom
                         val laneWidth = size.width / 8f
+                        val pxPerBeat = size.height / visibleBeats.toFloat()
                         val globalLane = floor(pos.x / laneWidth).toInt().coerceIn(0, 7)
                         val owner = if (globalLane < 4) NoteOwner.OPPONENT else NoteOwner.PLAYER
                         val lane = globalLane % 4
-                        val pxPerBeat = size.height / visibleBeats.toFloat()
-                        val rawMs = startMs + (pos.y / pxPerBeat) * beatMs
-                        val snapMs = beatMs * 4.0 / snap
-                        val snapped = max(0.0, round(rawMs / snapMs) * snapMs)
-                        currentTap(owner, lane, snapped)
+                        val raw = currentStart + (pos.y / pxPerBeat) * beatMs
+                        val snapMs = beatMs * 4.0 / currentSnap
+                        val snapped = max(0.0, round(raw / snapMs) * snapMs)
+                        onTapCell(owner, lane, snapped)
                     }
                 }
-                .pointerInput(startMs, zoom) {
-                    detectTransformGestures(panZoomLock = true) { _, pan, scale, _ ->
-                        val pxPerBeat = size.height / visibleBeats.toFloat()
-                        val msPerPx = beatMs / pxPerBeat
-                        if (abs(scale - 1f) > 0.002f) currentZoom(scale.toDouble())
-                        if (abs(pan.y) > 0.1f) currentPan(-pan.y * msPerPx)
+                .pointerInput(bpm) {
+                    detectTransformGestures(panZoomLock = true) { centroid, pan, scale, _ ->
+                        if (stretchingState.value) return@detectTransformGestures
+
+                        val oldZoom = zoomState.value
+                        val oldStart = startState.value
+                        val oldVisibleBeats = 9.0 / oldZoom
+                        val oldPxPerBeat = size.height / oldVisibleBeats.toFloat()
+                        val oldMsPerPx = beatMs / oldPxPerBeat
+                        val newZoom = (oldZoom * scale.toDouble()).coerceIn(0.45, 5.0)
+
+                        val newStart = if (abs(scale - 1f) > 0.002f) {
+                            val timeUnderFinger = oldStart + centroid.y * oldMsPerPx
+                            val newVisibleBeats = 9.0 / newZoom
+                            val newPxPerBeat = size.height / newVisibleBeats.toFloat()
+                            val newMsPerPx = beatMs / newPxPerBeat
+                            max(0.0, timeUnderFinger - centroid.y * newMsPerPx - pan.y * newMsPerPx)
+                        } else {
+                            max(0.0, oldStart - pan.y * oldMsPerPx)
+                        }
+                        onViewport(newStart, newZoom)
                     }
                 }
-                .pointerInput(startMs, zoom, snap) {
+                .pointerInput(bpm) {
                     var targetKey: LevelNoteKeyV5? = null
                     var baseSustain = 0.0
                     var accumulatedPx = 0f
 
                     detectDragGesturesAfterLongPress(
                         onDragStart = { pos ->
+                            val currentZoom = zoomState.value
+                            val currentStart = startState.value
+                            val currentSnap = snapState.value
+                            val visibleBeats = 9.0 / currentZoom
                             val laneWidth = size.width / 8f
+                            val pxPerBeat = size.height / visibleBeats.toFloat()
                             val globalLane = floor(pos.x / laneWidth).toInt().coerceIn(0, 7)
                             val owner = if (globalLane < 4) NoteOwner.OPPONENT else NoteOwner.PLAYER
                             val lane = globalLane % 4
-                            val pxPerBeat = size.height / visibleBeats.toFloat()
-                            val timeMs = startMs + (pos.y / pxPerBeat) * beatMs
-                            val hitMs = beatMs * 0.32
-                            val target = currentNotes
+                            val time = currentStart + (pos.y / pxPerBeat) * beatMs
+                            val snapMs = beatMs * 4.0 / currentSnap
+                            val hit = notesState.value
                                 .filter { it.owner == owner && it.lane == lane }
-                                .minByOrNull { abs(it.timeMs - timeMs) }
-                                ?.takeIf { abs(it.timeMs - timeMs) <= hitMs }
+                                .minByOrNull { abs(it.timeMs - time) }
+                                ?.takeIf { abs(it.timeMs - time) <= max(snapMs * 0.52, beatMs * 0.12) }
 
-                            if (target != null) {
-                                targetKey = LevelNoteKeyV5(target.timeMs, target.lane, target.owner)
-                                baseSustain = target.sustainMs
+                            if (hit != null) {
+                                targetKey = LevelNoteKeyV5(hit.timeMs, hit.lane, hit.owner)
+                                baseSustain = hit.sustainMs
                                 accumulatedPx = 0f
+                                stretching = true
+                                suppressTapUntil = SystemClock.uptimeMillis() + 700L
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                currentSustainStart(target)
+                                onSustainStart(targetKey!!)
                             }
                         },
                         onDragEnd = {
-                            if (targetKey != null) currentSustainEnd()
+                            if (targetKey != null) onSustainEnd()
                             targetKey = null
+                            stretching = false
                         },
                         onDragCancel = {
-                            if (targetKey != null) currentSustainEnd()
+                            if (targetKey != null) onSustainEnd()
                             targetKey = null
+                            stretching = false
                         }
                     ) { _, drag ->
                         val key = targetKey ?: return@detectDragGesturesAfterLongPress
-                        accumulatedPx += drag.y
+                        val currentZoom = zoomState.value
+                        val visibleBeats = 9.0 / currentZoom
                         val pxPerBeat = size.height / visibleBeats.toFloat()
                         val msPerPx = beatMs / pxPerBeat
-                        currentSustainPreview(key, baseSustain + accumulatedPx * msPerPx)
+                        accumulatedPx += drag.y
+                        onSustainSet(key, max(0.0, baseSustain + accumulatedPx * msPerPx))
                     }
                 }
         ) {
+            val visibleBeats = 9.0 / zoom
             val laneWidth = size.width / 8f
             val pxPerBeat = size.height / visibleBeats.toFloat()
             val endMs = startMs + visibleBeats * beatMs
@@ -772,9 +848,9 @@ private fun GestureChartGridV5(
             for (lane in 0..8) {
                 val x = lane * laneWidth
                 drawLine(
-                    color = if (lane == 4) MakerPalette.GridStrong else MakerPalette.Grid,
-                    start = Offset(x, 0f),
-                    end = Offset(x, size.height),
+                    if (lane == 4) MakerPalette.GridStrong else MakerPalette.Grid,
+                    Offset(x, 0f),
+                    Offset(x, size.height),
                     strokeWidth = if (lane == 4) 4f else 1.5f
                 )
             }
@@ -784,12 +860,12 @@ private fun GestureChartGridV5(
             for (step in firstStep..lastStep) {
                 val t = step * snapMs
                 val y = ((t - startMs) / beatMs * pxPerBeat).toFloat()
-                val beatBoundary = abs(t / beatMs - round(t / beatMs)) < 0.001
+                val beatLine = abs(t / beatMs - round(t / beatMs)) < 0.001
                 drawLine(
-                    color = if (beatBoundary) MakerPalette.GridStrong else MakerPalette.Grid.copy(alpha = 0.45f),
-                    start = Offset(0f, y),
-                    end = Offset(size.width, y),
-                    strokeWidth = if (beatBoundary) 2.5f else 1f
+                    if (beatLine) MakerPalette.GridStrong else MakerPalette.Grid.copy(alpha = 0.44f),
+                    Offset(0f, y),
+                    Offset(size.width, y),
+                    strokeWidth = if (beatLine) 2.5f else 1f
                 )
             }
 
@@ -809,31 +885,31 @@ private fun GestureChartGridV5(
                     if (note.sustainMs > 0) {
                         val sustainHeight = (note.sustainMs / beatMs * pxPerBeat).toFloat()
                         drawRoundRect(
-                            color = color.copy(alpha = 0.78f),
-                            topLeft = Offset(x + laneWidth * 0.42f, y + laneWidth * 0.28f),
-                            size = Size(laneWidth * 0.16f, max(4f, sustainHeight)),
-                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(5f, 5f)
+                            color.copy(alpha = 0.78f),
+                            Offset(x + laneWidth * 0.42f, y + laneWidth * 0.26f),
+                            Size(laneWidth * 0.16f, max(4f, sustainHeight)),
+                            cornerRadius = CornerRadius(5f, 5f)
                         )
                     }
 
-                    val headSize = min(laneWidth * 0.62f, 48f)
+                    val headSize = min(laneWidth * 0.65f, 50f)
                     val left = x + (laneWidth - headSize) / 2f
                     val active = sustainActive?.let {
                         it.timeMs == note.timeMs && it.lane == note.lane && it.owner == note.owner
                     } == true
 
                     drawRoundRect(
-                        color = color,
-                        topLeft = Offset(left, y - headSize / 2f),
-                        size = Size(headSize, headSize),
-                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(8f, 8f)
+                        color,
+                        Offset(left, y - headSize / 2f),
+                        Size(headSize, headSize),
+                        cornerRadius = CornerRadius(8f, 8f)
                     )
                     if (active) {
                         drawRoundRect(
-                            color = Color.White,
-                            topLeft = Offset(left - 4f, y - headSize / 2f - 4f),
-                            size = Size(headSize + 8f, headSize + 8f),
-                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(10f, 10f),
+                            Color.White,
+                            Offset(left - 4f, y - headSize / 2f - 4f),
+                            Size(headSize + 8f, headSize + 8f),
+                            cornerRadius = CornerRadius(10f, 10f),
                             style = Stroke(width = 4f)
                         )
                     }
@@ -841,11 +917,7 @@ private fun GestureChartGridV5(
         }
 
         Row(
-            Modifier
-                .fillMaxWidth()
-                .align(Alignment.TopCenter)
-                .background(Color.Black.copy(alpha = 0.45f))
-                .padding(vertical = 3.dp)
+            Modifier.fillMaxWidth().align(Alignment.TopCenter).background(Color.Black.copy(alpha = 0.48f)).padding(vertical = 3.dp)
         ) {
             listOf("←", "↓", "↑", "→", "←", "↓", "↑", "→").forEachIndexed { index, arrow ->
                 Text(
@@ -859,11 +931,7 @@ private fun GestureChartGridV5(
         }
 
         Row(
-            Modifier
-                .fillMaxWidth()
-                .align(Alignment.BottomCenter)
-                .background(Color.Black.copy(alpha = 0.48f))
-                .padding(vertical = 4.dp)
+            Modifier.fillMaxWidth().align(Alignment.BottomCenter).background(Color.Black.copy(alpha = 0.50f)).padding(vertical = 4.dp)
         ) {
             Text("INIMIGO", color = MakerPalette.Muted, fontWeight = FontWeight.Black, textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
             Text("JOGADOR", color = MakerPalette.Muted, fontWeight = FontWeight.Black, textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
@@ -881,7 +949,7 @@ private fun LevelPackageDialogV5(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Pacotes de sprites") },
+        title = { Text("Pacotes de objetos") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Ícone • Item • Cenário • Personagem")
@@ -932,23 +1000,21 @@ private fun CreatePackageDialogV5(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Novo pacote") },
+        title = { Text("Novo pacote / objeto") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(name, { name = it }, label = { Text("Nome") }, singleLine = true)
                 Text("Tipo")
                 MakerTabRow(
-                    labels = listOf("Ícone", "Item", "Cenário", "Personagem"),
-                    selected = kind.ordinal,
-                    onSelect = { index: Int -> kind = EditorObjectKind.entries[index] }
+                    listOf("Ícone", "Item", "Cenário", "Personagem"),
+                    kind.ordinal,
+                    { index: Int -> kind = EditorObjectKind.entries[index] }
                 )
-                Text("O Character Editor continua sendo o lugar de editar animações. Aqui o tipo serve para organizar e reutilizar o sprite no nível.")
+                Text("Depois escolha a imagem. Personagens continuam sendo editados no Character Editor; aqui a categoria serve para organizar/posicionar o objeto na cena.")
             }
         },
         confirmButton = {
-            TextButton(onClick = { onCreate(name, kind) }, enabled = name.isNotBlank()) {
-                Text("Escolher imagem")
-            }
+            TextButton(onClick = { onCreate(name, kind) }, enabled = name.isNotBlank()) { Text("Escolher imagem") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
     )
