@@ -1,5 +1,7 @@
 package com.vitkkk.fnfmobilestudio.export
 
+import com.vitkkk.fnfmobilestudio.model.AssetKind
+import com.vitkkk.fnfmobilestudio.model.AssetRef
 import com.vitkkk.fnfmobilestudio.model.Chart
 import com.vitkkk.fnfmobilestudio.model.DifficultyChart
 import com.vitkkk.fnfmobilestudio.model.Note
@@ -13,6 +15,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -84,5 +87,28 @@ class PsychV1ExporterTest {
         assertEquals(2.0, sections[0].jsonObject.getValue("sectionBeats").jsonPrimitive.content.toDouble(), 0.0001)
         assertEquals(true, sections[1].jsonObject.getValue("changeBPM").jsonPrimitive.content.toBoolean())
         assertEquals("Hey!", root.getValue("events").jsonArray[0].jsonArray[1].jsonArray[0].jsonArray[0].jsonPrimitive.content)
+    }
+
+    @Test
+    fun exportsUnassignedSongsThroughAFreeplayOnlyTechnicalWeek() {
+        val song = Song(id = "bonus", displayName = "Bonus Song", bpm = 150.0)
+        val bundle = exporter.export(Project(id = "p", name = "Project", songs = listOf(song)))
+        val week = bundle.artifacts.single { it.path == "weeks/fnfms-freeplay-only.json" }
+        val json = Json.parseToJsonElement(requireNotNull(week.textContent)).jsonObject
+
+        assertTrue(json.getValue("hideStoryMode").jsonPrimitive.content.toBoolean())
+        assertFalse(json.getValue("hideFreeplay").jsonPrimitive.content.toBoolean())
+        assertEquals("Bonus Song", json.getValue("songs").jsonArray[0].jsonArray[0].jsonPrimitive.content)
+        assertTrue(bundle.artifacts.single { it.path == "weeks/weekList.txt" }.textContent!!.contains("fnfms-freeplay-only"))
+    }
+
+    @Test
+    fun doesNotDisguiseMp3BytesAsOgg() {
+        val asset = AssetRef(id = "inst", relativePath = "assets/audio/song.mp3", kind = AssetKind.AUDIO)
+        val song = Song(id = "song", displayName = "Song", bpm = 120.0, instrumentalAssetId = asset.id)
+        val bundle = exporter.export(Project(id = "p", name = "Project", songs = listOf(song), assets = listOf(asset)))
+
+        assertTrue(bundle.warnings.any { it.contains("transcoded to OGG") })
+        assertFalse(bundle.artifacts.any { it.path == "songs/song/Inst.ogg" })
     }
 }
