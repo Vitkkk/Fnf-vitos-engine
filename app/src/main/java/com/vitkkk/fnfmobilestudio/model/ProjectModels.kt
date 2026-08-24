@@ -15,6 +15,7 @@ data class Project(
     val songs: List<Song> = emptyList(),
     val characters: List<CharacterDefinition> = emptyList(),
     val stages: List<StageDefinition> = emptyList(),
+    val spritePackages: List<SpritePackage> = emptyList(),
     val assets: List<AssetRef> = emptyList(),
     val settings: ProjectSettings = ProjectSettings()
 )
@@ -161,8 +162,28 @@ data class StageObject(
     val angle: Double = 0.0,
     val flipX: Boolean = false,
     val antialiasing: Boolean = true,
-    val layer: Int = 0
+    val layer: Int = 0,
+    val packageId: String? = null,
+    val editorKind: EditorObjectKind = EditorObjectKind.SCENERY
 )
+
+@Serializable
+data class SpritePackage(
+    val id: String,
+    val displayName: String,
+    val kind: EditorObjectKind = EditorObjectKind.ITEM,
+    val imageAssetId: String? = null,
+    val iconAssetId: String? = null,
+    val characterId: String? = null
+)
+
+@Serializable
+enum class EditorObjectKind {
+    ICON,
+    ITEM,
+    SCENERY,
+    CHARACTER
+}
 
 @Serializable
 data class AssetRef(
