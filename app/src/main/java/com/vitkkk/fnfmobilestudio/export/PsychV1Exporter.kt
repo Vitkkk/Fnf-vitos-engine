@@ -18,7 +18,7 @@ import kotlinx.serialization.json.put
 import kotlin.math.max
 
 /**
- * Export profile based on the current archived ShadowMario/FNF-PsychEngine main
+ * Export profile based on the archived ShadowMario/FNF-PsychEngine main
  * chart format (`format = psych_v1`). Editor state never depends on these DTOs.
  */
 class PsychV1Exporter : ModExporter {
@@ -37,7 +37,7 @@ class PsychV1Exporter : ModExporter {
 
         project.songs.forEach { song ->
             song.difficulties.forEach { difficulty ->
-                val songFolder = psychPath(song.id)
+                val songFolder = psychPath(song.displayName)
                 val chartName = if (difficulty.id.equals("normal", ignoreCase = true)) {
                     songFolder
                 } else {
@@ -49,16 +49,22 @@ class PsychV1Exporter : ModExporter {
                 )
             }
 
-            song.instrumentalAssetId?.let { assetId ->
-                if (assetsById.containsKey(assetId)) {
-                    artifacts += ExportArtifact("songs/${psychPath(song.id)}/Inst.ogg", sourceAssetId = assetId)
-                } else warnings += "Song ${song.id}: instrumental asset '$assetId' is missing"
-            }
-            song.vocalsAssetId?.let { assetId ->
-                if (assetsById.containsKey(assetId)) {
-                    artifacts += ExportArtifact("songs/${psychPath(song.id)}/Voices.ogg", sourceAssetId = assetId)
-                } else warnings += "Song ${song.id}: vocals asset '$assetId' is missing"
-            }
+            queueAudioArtifact(
+                song = song,
+                assetId = song.instrumentalAssetId,
+                targetName = "Inst.ogg",
+                assetsById = assetsById,
+                artifacts = artifacts,
+                warnings = warnings
+            )
+            queueAudioArtifact(
+                song = song,
+                assetId = song.vocalsAssetId,
+                targetName = "Voices.ogg",
+                assetsById = assetsById,
+                artifacts = artifacts,
+                warnings = warnings
+            )
         }
 
         project.weeks.forEach { week ->
@@ -75,21 +81,83 @@ class PsychV1Exporter : ModExporter {
             )
         }
 
+        val assignedSongIds = project.weeks.flatMap { it.songIds }.toSet()
+        val freeplayOnlySongs = project.songs.filterNot { it.id in assignedSongIds }
+        val freeplayTechnicalWeekId = if (freeplayOnlySongs.isNotEmpty()) uniqueFreeplayWeekId(project) else null
+        if (freeplayTechnicalWeekId != null) {
+            val technicalWeek = Week(
+                id = freeplayTechnicalWeekId,
+                internalName = freeplayTechnicalWeekId,
+                displayName = "Freeplay",
+                songIds = freeplayOnlySongs.map { it.id }
+            )
+            artifacts += ExportArtifact(
+                path = "weeks/${psychPath(freeplayTechnicalWeekId)}.json",
+                textContent = json.encodeToString(
+                    JsonObject.serializer(),
+                    buildWeek(technicalWeek, freeplayOnlySongs, hideStoryMode = true)
+                )
+            )
+        }
+
         project.stages.forEach { stage ->
             artifacts += ExportArtifact(
                 path = "stages/${psychPath(stage.id)}.json",
-                textContent = json.encodeToString(JsonObject.serializer(), buildStage(stage, assetsById.mapValues { it.value.relativePath }))
+                textContent = json.encodeToString(
+                    JsonObject.serializer(),
+                    buildStage(stage, assetsById.mapValues { it.value.relativePath })
+                )
             )
         }
 
-        if (project.weeks.isNotEmpty()) {
+        val weekIds = buildList {
+            addAll(project.weeks.map { psychPath(it.id) })
+            if (freeplayTechnicalWeekId != null) add(psychPath(freeplayTechnicalWeekId))
+        }
+        if (weekIds.isNotEmpty()) {
             artifacts += ExportArtifact(
                 path = "weeks/weekList.txt",
-                textContent = project.weeks.joinToString("\n") { psychPath(it.id) } + "\n"
+                textContent = weekIds.joinToString("\n") + "\n"
             )
         }
 
-        return ExportBundle(profileId, artifacts, warnings)
+        return ExportBundle(profileId, artifacts, warnings.distinct())
+    }
+
+    private fun queueAudioArtifact(
+        song: Song,
+        assetId: String?,
+        targetName: String,
+        assetsById: Map<String, com.vitkkk.fnfmobilestudio.model.AssetRef>,
+        artifacts: MutableList<ExportArtifact>,
+        warnings: MutableList<String>
+    ) {
+        if (assetId == null) return
+        val asset = assetsById[assetId]
+        if (asset == null) {
+            warnings += "Song ${song.displayName}: audio asset '$assetId' is missing"
+            return
+        }
+        val extension = asset.relativePath.substringAfterLast('.', "").lowercase()
+        if (extension != "ogg") {
+            warnings += "Song ${song.displayName}: ${asset.relativePath} must be transcoded to OGG before Psych export; this build will not disguise .$extension bytes as .ogg"
+            return
+        }
+        artifacts += ExportArtifact(
+            path = "songs/${psychPath(song.displayName)}/$targetName",
+            sourceAssetId = assetId
+        )
+    }
+
+    private fun uniqueFreeplayWeekId(project: Project): String {
+        val used = project.weeks.map { psychPath(it.id) }.toSet()
+        var id = "fnfms-freeplay-only"
+        var suffix = 2
+        while (psychPath(id) in used) {
+            id = "fnfms-freeplay-only-$suffix"
+            suffix++
+        }
+        return id
     }
 
     private fun buildSong(song: Song, chart: Chart): JsonObject {
@@ -200,7 +268,7 @@ class PsychV1Exporter : ModExporter {
     private fun activeTempo(tempos: List<TempoPoint>, timeMs: Double): TempoPoint =
         tempos.lastOrNull { it.timeMs <= timeMs + EPSILON } ?: tempos.first()
 
-    private fun buildWeek(week: Week, songs: List<Song>): JsonObject = buildJsonObject {
+    private fun buildWeek(week: Week, songs: List<Song>, hideStoryMode: Boolean = false): JsonObject = buildJsonObject {
         put("songs", buildJsonArray {
             songs.forEach { song ->
                 add(buildJsonArray {
@@ -224,7 +292,7 @@ class PsychV1Exporter : ModExporter {
         put("weekName", week.displayName)
         put("startUnlocked", true)
         put("hiddenUntilUnlocked", false)
-        put("hideStoryMode", false)
+        put("hideStoryMode", hideStoryMode)
         put("hideFreeplay", false)
         put("difficulties", "")
     }
