@@ -9,7 +9,7 @@ internal fun MakerTabRow(
     labels: List<String>,
     selected: Int,
     modifier: Modifier = Modifier,
-    onSelect: (Int) -> Unit
+    onTabSelected: (Int) -> Unit
 ) {
-    MakerTabRow(labels, selected, onSelect, modifier)
+    MakerTabRow(labels, selected, onTabSelected, modifier)
 }
