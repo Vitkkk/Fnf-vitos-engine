@@ -1,15 +1,13 @@
 package com.vitkkk.fnfmobilestudio.ui
 
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
 
-/** Convenience overload so editor screens can use a trailing lambda for tab selection. */
+/** Convenience overload for editor screens that use a trailing selection lambda. */
 @Composable
 internal fun MakerTabRow(
     labels: List<String>,
     selected: Int,
-    modifier: Modifier = Modifier,
     onTabSelected: (Int) -> Unit
 ) {
-    MakerTabRow(labels, selected, onTabSelected, modifier)
+    MakerTabRow(labels = labels, selected = selected, onSelect = onTabSelected)
 }
