@@ -4,6 +4,7 @@ import android.content.Context
 import com.vitkkk.fnfmobilestudio.model.Project
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
