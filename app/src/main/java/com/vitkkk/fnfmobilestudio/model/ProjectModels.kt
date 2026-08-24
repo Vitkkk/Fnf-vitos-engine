@@ -102,6 +102,7 @@ data class CharacterDefinition(
     val id: String,
     val displayName: String,
     val imageAssetId: String? = null,
+    val iconAssetId: String? = null,
     val scale: Double = 1.0,
     val flipX: Boolean = false,
     val antialiasing: Boolean = true,
@@ -130,7 +131,11 @@ data class StageDefinition(
     val opponent: StageCharacterSlot = StageCharacterSlot(100.0, 100.0),
     val girlfriend: StageCharacterSlot = StageCharacterSlot(400.0, 130.0),
     val hideGirlfriend: Boolean = false,
-    val objects: List<StageObject> = emptyList()
+    val objects: List<StageObject> = emptyList(),
+    val previewAssetId: String? = null,
+    val previewBoyfriendId: String? = "bf",
+    val previewOpponentId: String? = "dad",
+    val previewGirlfriendId: String? = "gf"
 )
 
 @Serializable
